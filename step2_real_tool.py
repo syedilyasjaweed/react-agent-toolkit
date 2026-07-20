@@ -63,7 +63,7 @@ def search_resume_bullets(query, top_k=5):
 
 
 # This block only runs when you execute this file directly
-# (python step2_real_tool.py). If you later import this function
+# (python3 step2_real_tool.py). If you later import this function
 # into another script, this part gets skipped — it's just for testing.
 if __name__ == "__main__":
     print(search_resume_bullets("Oracle PL/SQL database developer"))
