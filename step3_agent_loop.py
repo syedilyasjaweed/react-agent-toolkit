@@ -194,17 +194,18 @@ def run_tool(tool_name, tool_input):
     return f"Unknown tool: {tool_name}"
 
 
-# --- 3. The ReAct loop ---
-# Unchanged from before. It doesn't need to know how many tools exist or
-# what they do — it just runs whatever tool_use blocks Claude produces,
-# in a turn that can now contain any mix of all three tools.
-def run_agent(user_message):
-    messages = [{"role": "user", "content": user_message}]
-
+# --- 3. The ReAct loop, one turn at a time ---
+# This is the same tool-calling loop as before, but it no longer owns
+# `messages` itself — it receives the list from the caller and mutates
+# it in place (appending assistant turns and tool results as it goes).
+# That's what makes multi-turn possible: the caller can keep reusing the
+# same growing list across several calls to this function, so Claude
+# still has everything said earlier in the conversation.
+def run_agent_turn(messages):
     while True:
         response = client.messages.create(
             model="claude-sonnet-5",
-            max_tokens=1024,
+            max_tokens=4096,
             system=SYSTEM_PROMPT,
             tools=tools,
             messages=messages,
@@ -215,6 +216,10 @@ def run_agent(user_message):
                 print(f"\n[Claude]: {block.text}")
 
         if response.stop_reason != "tool_use":
+            # Claude's final answer for THIS turn. Append it to history
+            # before returning, so the next user turn's API call includes
+            # it — otherwise Claude would "forget" its own last answer.
+            messages.append({"role": "assistant", "content": response.content})
             final_text = "".join(b.text for b in response.content if b.type == "text")
             print(f"\n=== FINAL ANSWER ===\n{final_text}")
             return final_text
@@ -238,15 +243,39 @@ def run_agent(user_message):
         messages.append({"role": "user", "content": tool_result_blocks})
 
 
-if __name__ == "__main__":
-    print("Paste the job description below.")
-    print("When you're done, type END on its own line and press Enter:\n")
-    lines = []
-    while True:
-        line = input()
-        if line.strip() == "END":
-            break
-        lines.append(line)
-    job_description = "\n".join(lines)
+# --- 4. Multi-turn conversation loop ---
+# Owns the one `messages` list for the whole conversation. Each pass:
+# collect a new user message, append it, hand the list to run_agent_turn
+# (which may call tools any number of times before answering), then loop
+# back for the next message. The conversation only ends when you type
+# QUIT — until then, Claude has the full history: earlier fit checks,
+# company research, and its own prior answers.
+def chat():
+    print("Multi-turn job assistant. Paste a message, then type END on its")
+    print("own line to send it. Type QUIT (instead of a message) to exit.\n")
 
-    run_agent(job_description)
+    messages = []
+    while True:
+        print("--- Your turn ---")
+        lines = []
+        while True:
+            line = input()
+            stripped = line.strip()
+            if stripped == "END":
+                break
+            if stripped == "QUIT":
+                print("\nEnding conversation.")
+                return
+            lines.append(line)
+
+        user_message = "\n".join(lines).strip()
+        if not user_message:
+            # Nothing typed before END — skip rather than send an empty turn.
+            continue
+
+        messages.append({"role": "user", "content": user_message})
+        run_agent_turn(messages)
+
+
+if __name__ == "__main__":
+    chat()
